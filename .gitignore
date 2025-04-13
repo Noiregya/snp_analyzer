@@ -1,0 +1,9 @@
+input.txt
+bin/
+include/
+lib/
+lib64
+pyvenv.cfg
+conf.ini
+output.csv
+skipped.csv
