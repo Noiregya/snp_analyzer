@@ -5,3 +5,6 @@ I am not a bioinformatian I'm just doing this for fun, this project isn't meant 
 ## Resources
 ### https://biopython.org/docs/1.76/api/Bio.Entrez.html
 ### https://www.ncbi.nlm.nih.gov/snp/rs548049170
+
+## TODO
+* Remove uncharacterized "junk"

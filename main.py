@@ -12,6 +12,13 @@ Entrez.email = conf.get("General", "email")
 snp_dict = {}
 snp_skipped = []
 gene_list = []
+cs_list = ["PATHOGENIC", "ASSOCIATION", "OTHER", "UNCERTAIN", "BENIGN", "NONE"]
+clinical_signifiance_dict = {'pathogenic':cs_list[0], 'pathogenic-likely-pathogenic':cs_list[0], 'likely-pathogenic':cs_list[0], 
+'pathogenic-low-penetrance':cs_list[0], 'affects':cs_list[1], 'risk-factor':cs_list[1], 'drug-response':cs_list[1], 
+'association':cs_list[1], 'other':cs_list[2], 'uncertain-significance':cs_list[3], 'conflicting-interpretations-of-pathogenicity':cs_list[3], 
+'no-classifications-from-unflagged-records':cs_list[3], 'not-provided':cs_list[3], 'likely-benign':cs_list[3], 
+'benign-likely-benign':cs_list[3], 'benign':cs_list[3], 'None':cs_list[4]}
+
 
 with open("input.txt", "r", encoding="utf-8") as file:
     lines = file.read().splitlines()
@@ -27,6 +34,7 @@ with open("input.txt", "r", encoding="utf-8") as file:
             case _:
                 genotype = line.split()[3]
                 snp_dict[snp_id[2:]] = genotype
+
 
 def fetch_snp(id_dict):
     search_results = Entrez.read(Entrez.epost("snp", id=",".join(id_dict.keys())))
@@ -64,7 +72,8 @@ def extract_snp(data):
         entry["SNP_ID"] = snp.get("SNP_ID")
         if entry["SNP_ID"] == None:
             continue
-        entry["CLINICAL_SIGNIFICANCE"] = snp["CLINICAL_SIGNIFICANCE"]
+        entry["CLINICAL_SIGNIFICANCE"] = get_clinical_signifiance_category(snp["CLINICAL_SIGNIFICANCE"])
+        entry["SPDI"] = snp["SPDI"]
         entry["GENES"] = snp["GENES"]
         # Get a record of every gene for requesting detail later
         genes = entry["GENES"]
@@ -75,6 +84,7 @@ def extract_snp(data):
             for gene in genes:
                 gene_list.append(gene["GENE_ID"])
         res.append(entry)
+
     return res
 
 def fetch_genes(gene_set):
@@ -94,6 +104,7 @@ def fetch_genes(gene_set):
 def add_genes(snp_data, gene_data):
     print(f"Fusing {len(gene_data)} genes with SNPs")
     gene_array = []
+    gene_array_mutated = []
     steps = 100
     for i in range(len(gene_data)):
         gene = gene_data[i]
@@ -108,8 +119,10 @@ def add_genes(snp_data, gene_data):
         gene_locus = gene["Entrezgene_gene"]["Gene-ref"]["Gene-ref_locus"]
         gene_id = gene["Entrezgene_track-info"]["Gene-track"]["Gene-track_geneid"]
 
-        snp_id = ""
-        snp_clinical_signifiance = ""
+        snp_clinical_signifiance = {k: [] for k in cs_list}
+
+        snp_clinical_signifiance_mutated = {k: [] for k in cs_list}
+        mutated = False
         for snp in snp_data:
             genes_in_snp = snp["GENES"]
             if genes_in_snp is None:
@@ -119,21 +132,48 @@ def add_genes(snp_data, gene_data):
                 genes_content = [genes_content]
             for gene_content in genes_content:
                 snp_gene_id = gene_content["GENE_ID"]
-                if gene_id == snp_gene_id:
-                    if len(snp_id) > 0:
-                        genotype = f"{genotype}|{snp_dict.get(snp["SNP_ID"])}"
-                        snp_id = f"{snp_id}|{snp["SNP_ID"]}"
-                    else:
-                        genotype = snp_dict.get(snp["SNP_ID"])
-                        snp_id = snp["SNP_ID"]
-                    if len(snp_clinical_signifiance) > 0:
-                        snp_clinical_signifiance = f"{snp_clinical_signifiance}|{snp["CLINICAL_SIGNIFICANCE"]}"
-                    else:
-                        continue
+                genotype = snp_dict.get(snp["SNP_ID"])
+                if gene_id == snp_gene_id and genotype is not None:
+                    reference_genotype = snp["SPDI"].split(":")[2]
+                    snp_mutated = False
+                    # Check genotype against reference 
+                    for char in genotype:
+                        snp_mutated = snp_mutated or char == reference_genotype
+                    if snp_mutated:
+                        mutated = True
+                        snp_clinical_signifiance_mutated[snp["CLINICAL_SIGNIFICANCE"]]\
+                        .append(f"{snp["SNP_ID"]} {genotype}")
+                    snp_clinical_signifiance[snp["CLINICAL_SIGNIFICANCE"]]\
+                    .append(f"{snp["SNP_ID"]} {genotype}:{"Mutated" if mutated else "Reference"}")
                     break
-        gene_array.append({"gene_id":gene_id, "gene_locus":gene_locus, "gene_desc":gene_desc, 
-            "summary":summary,"clinical_signifiance":snp_clinical_signifiance, "snp_id":snp_id, "genotype": genotype})
-    return gene_array
+
+        gene_base = {"gene_id":gene_id, "gene_locus":gene_locus, "gene_desc":gene_desc, "summary":summary}
+        gene_info = gene_base.copy()
+        for col in cs_list:
+            gene_info[col] = snp_clinical_signifiance[col]
+        gene_array.append(gene_info)
+        if(mutated):
+            gene_info_mutated = gene_base.copy()
+            for col in cs_list:
+                gene_info_mutated[col] = snp_clinical_signifiance_mutated[col]
+            gene_array_mutated.append(gene_info_mutated)
+    return [gene_array, gene_array_mutated]
+
+# Find the most relevant clinical signifiance and returns a category for it
+def get_clinical_signifiance_category(cs_string):
+    cs_string = cs_string or "None"
+    cs_list = cs_string.split(",")
+    best = ""
+    best_pos = 999
+    for cs in cs_list:
+        pos = 0
+        for key in clinical_signifiance_dict.keys():
+            pos = pos + 1
+            if key == cs and pos < best_pos:
+                best = clinical_signifiance_dict[key]
+                best_pos = pos
+                break
+    return best
 
 def export_csv(data, filename = "output.csv"):
     # Header
@@ -150,7 +190,8 @@ snp_data = fetch_snp(snp_dict)
 
 final_data = add_genes(snp_data, fetch_genes(set(gene_list)))
 print("Exporting output.csv")
-export_csv(final_data)
+export_csv(final_data[0])
+export_csv(final_data[1], "output_mutated.csv")
 export_csv(snp_skipped, "skipped.csv")
 
 end = time.time()
