@@ -147,7 +147,7 @@ def add_genes(snp_data, gene_data):
                     .append(f"{snp["SNP_ID"]} {genotype}:{"Mutated" if mutated else "Reference"}")
                     break
 
-        gene_base = {"gene_id":gene_id, "gene_locus":gene_locus, "gene_desc":gene_desc, "summary":summary}
+        gene_base = {"gene_id":gene_id, "gene_locus":gene_locus, "gene_desc":gene_desc, "summary":summary.replace('"','""')}
         gene_info = gene_base.copy()
         for col in cs_list:
             gene_info[col] = snp_clinical_signifiance[col]
