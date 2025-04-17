@@ -1,5 +1,5 @@
 # SNP Analyzer
-A simple script to extract human genome data from the Entrez database and sorts it for analysis
+A simple script to extract human genome data from the Entrez endpoit and sorts it for analysis
 ## Why
 I am not a bioinformatian I'm just doing this for fun, this project isn't meant to be used by professionals
 ## Resources
