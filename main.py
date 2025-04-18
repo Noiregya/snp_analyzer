@@ -138,7 +138,7 @@ def add_genes(snp_data, gene_data):
                     snp_mutated = False
                     # Check genotype against reference 
                     for char in genotype:
-                        snp_mutated = snp_mutated or char == reference_genotype
+                        snp_mutated = snp_mutated or char != reference_genotype
                     if snp_mutated:
                         mutated = True
                         snp_clinical_signifiance_mutated[snp["CLINICAL_SIGNIFICANCE"]]\
