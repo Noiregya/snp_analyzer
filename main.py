@@ -1,11 +1,12 @@
-from Bio import Entrez
-from Bio import SeqIO
-import xmltodict
+import http
 import time
-import configparser
 import json
 import os
 import io
+import configparser
+import xmltodict
+from Bio import Entrez
+from Bio import SeqIO
 
 conf = configparser.ConfigParser()
 conf.read("conf.ini")
@@ -16,11 +17,11 @@ feature_types = ["gene"]
 snp_skipped = []
 gene_list = []
 cs_list = ["PATHOGENIC", "ASSOCIATION", "OTHER", "UNCERTAIN", "BENIGN", "NONE"]
-clinical_signifiance_dict = {'pathogenic':cs_list[0], 'pathogenic-likely-pathogenic':cs_list[0], 'likely-pathogenic':cs_list[0], 
-'pathogenic-low-penetrance':cs_list[0], 'affects':cs_list[1], 'risk-factor':cs_list[1], 'drug-response':cs_list[1], 
-'association':cs_list[1], 'other':cs_list[2], 'uncertain-significance':cs_list[3], 'conflicting-interpretations-of-pathogenicity':cs_list[3], 
-'no-classifications-from-unflagged-records':cs_list[3], 'not-provided':cs_list[3], 'likely-benign':cs_list[3], 
-'benign-likely-benign':cs_list[3], 'benign':cs_list[3], 'None':cs_list[4]}
+clinical_signifiance_dict = {'pathogenic':0, 'pathogenic-likely-pathogenic':0, 'likely-pathogenic':0, 
+'pathogenic-low-penetrance':0, 'affects':1, 'risk-factor':1, 'drug-response':1, 
+'association':1, 'other':2, 'uncertain-significance':2, 'conflicting-interpretations-of-pathogenicity':2, 
+'no-classifications-from-unflagged-records':2, 'not-provided':2, 'likely-benign':3, 
+'benign-likely-benign':3, 'benign':3, 'None':4}
 
 assembly_grch37_chromosomes_dict = {"1":["CM000663.1","NC_000001.10"],
 "2":["CM000664.1","NC_000002.11"],
@@ -121,6 +122,7 @@ def get_shallow_snp(snp_elements, chromosome_dict):
                 gene_id = list(filter(lambda x: x.split(":")[0] == "GeneID", ql["db_xref"]))[0].split(":")[1]
                 gene_locus = ql["gene"][0]
                 note = ql.get("note")
+                gene_desc = ""
                 if note is not None:
                     gene_desc = note[0]
                 indel = False
@@ -171,41 +173,52 @@ def get_shallow_snp(snp_elements, chromosome_dict):
 #                     snp_dict[rsid[2:]] = genotype
 
 def fetch_snp(snp_dict):
-    snp_ids = [] 
+    snp_ids = []
     for snp in snp_dict.keys():
         if snp[:2] == "rs":
             snp_ids.append(snp[2:])
-    search_results = Entrez.read(Entrez.epost("snp", id=",".join(snp_ids)))
-    query_key = search_results["QueryKey"]
-    webenv = search_results["WebEnv"]
+    if not os.path.isfile("snps.xml"):
+        search_results = Entrez.read(Entrez.epost("snp", id=",".join(snp_ids)))
+        query_key = search_results["QueryKey"]
+        webenv = search_results["WebEnv"]
 
-    batch_size = 100000
-    count = len(snp_ids)
-    for start in range(0, count, batch_size):
-        end = min(count, start + batch_size)
-        print("Downloading snp %i to %i" % (start + 1, end))
-        stream = Entrez.efetch(
-            db="snp", 
-            webenv=webenv, 
-            query_key=query_key, 
-            rettype="gb", 
-            retmode="text", 
-            retstart=start,
-            retmax=batch_size,
-            idtype="acc",
-        )
-        data = stream.read()
-        stream.close()
-        print("Processing SNPs")
+        data = ""
+        batch_size = 100000
+        count = len(snp_ids)
+        for snp_start in range(0, count, batch_size):
+            snp_end = min(count, snp_start + batch_size)
+            print(f"Caching snp {snp_start + 1} to {snp_end}")
+            stream = Entrez.efetch(
+                db="snp",
+                webenv=webenv,
+                query_key=query_key,
+                rettype="gb",
+                retmode="text",
+                retstart=snp_start,
+                retmax=batch_size,
+                idtype="acc",
+            )
+            data = data + stream.read()
+            stream.close()
+        print("Saving SNPs")
+        with io.open("snps.xml", "w", encoding="utf-8") as file:
+            file.write(f"<top>{data}</top>")
+
+    # Open snp file
+    with open("snps.xml", "r", encoding="utf-8") as file:
+        print("Loading snps...")
+        data = file.read()
+        #snp_dict = json.loads(data)
+
     return assemble_snp(data, snp_dict) #TODO: Parse using Entrez
 
-
 def assemble_snp(data, snp_dict):
-    top = xmltodict.parse(f"<top>{data}</top>")['top']
+    top = xmltodict.parse(data)['top']
+    del data
     # Locate SNPs
     for snp in top["DocumentSummary"]:
         snp_id = snp.get("SNP_ID")
-        if snp_id == None:
+        if snp_id is None:
             continue
         rsid = f"rs{snp_id}"
         dict_entry = snp_dict.get(rsid)
@@ -218,38 +231,80 @@ def assemble_snp(data, snp_dict):
             reference_genotype = snp["SPDI"].split(":")[2]
 
         if reference_genotype != snp_dict[rsid]["reference"] and snp_dict[rsid]["indel"] is False:
-            print(f"Alignement error: snp: {rsid}, snp database:{reference_genotype}, from sequence:{snp_dict[rsid]["reference"]}")
+            print(f"Alignement error: snp: {rsid}, snp database:{reference_genotype}, from sequence:{snp_dict[rsid]['reference']}")
             snp_dict[rsid]["reference"] = reference_genotype
 
         snp_dict[rsid]["clinical_signifiance"] = clinical_signifiance
+    del top
     return snp_dict
 
 
-def fetch_genes(gene_set):
+def fetch_genes(snp_dict, gene_set):
+    gene_set = list(gene_set)
     print(f"Fetching {len(gene_set)} genes, be patient the process can be very long")
     search_results = Entrez.read(Entrez.epost("gene", id=",".join(gene_set)))
     query_key = search_results["QueryKey"]
     webenv = search_results["WebEnv"]
     
-    handle = Entrez.efetch(
-            db="gene",
-            id=gene_set,
-            retmode="xml"
-        )
-    return Entrez.read(handle, validate=False)
+    # handle = Entrez.efetch(
+    #         db="gene",
+    #         id=gene_set,
+    #         retmode="xml",
+    #         complexity="4",
+    #     )
+
+    batch_size = 500
+    count = len(gene_set)
+    #data = b""
+    for gene_start in range(0, count, batch_size):
+        gene_end = min(count, gene_start + batch_size)
+        #data = data + stream.read()
+        attempts = 5
+        i = 0
+        while i < attempts:
+            try:
+                print(f"{(gene_start / count * 100):.2f}% Downloading gene {gene_start + 1} to {gene_end}")
+                stream = Entrez.efetch(
+                    db="gene",
+                    retmode="xml",
+                    complexity="4",
+                    webenv=webenv,
+                    query_key=query_key,
+                    retstart=gene_start,
+                    retmax=batch_size,
+                )
+                data, mutated_data = merge_snp_genes(snp_dict, Entrez.read(stream))
+            except (Entrez.Parser.ValidationError, http.client.IncompleteRead) as err:
+                i = i + 1
+                print(f"{err}\nDownload error, trying again...")
+                continue
+            except RuntimeError as err:
+                print(f"{err}\nDownload error, trying again...")
+                search_results = Entrez.read(Entrez.epost("gene", id=",".join(gene_set)))
+                query_key = search_results["QueryKey"]
+                webenv = search_results["WebEnv"]
+                continue
+            break
+        stream.close()
+        export_csv(data)
+        export_csv(mutated_data, "output_mutated.csv")
+        print("Processing genes")
+    #res = Entrez.parse(data)
+    return
 
 
 def merge_snp_genes(snp_dict, gene_data):
-    print(f"Fusing {len(gene_data)} genes with SNPs")
+    print(f"Fusing genes with SNPs")
     gene_dict = {}
     gene_dict_mutated = {}
     steps = 100
-    for i in range(len(gene_data)):
-        gene = gene_data[i]
-        if i % steps == 0:
-            percentage = "{:.2f}".format(i / len(gene_data) * 100)
-            print(f"Fusion progress {percentage} %")
-        gene_desc = gene["Entrezgene_gene"]["Gene-ref"]["Gene-ref_desc"]
+    i = 0
+    length = len(gene_data)
+    for gene in gene_data:
+        #if i % steps == 0:
+        #    percentage = "{:.2f}".format(i / length * 100)
+        #    print(f"Fusion progress {percentage} %")
+        gene_desc = gene["Entrezgene_gene"]["Gene-ref"].get("Gene-ref_desc")
         gene_locus = gene["Entrezgene_gene"]["Gene-ref"]["Gene-ref_locus"]
         gene_id = gene["Entrezgene_track-info"]["Gene-track"]["Gene-track_geneid"]
         summary = gene.get("Entrezgene_summary") or ""
@@ -261,7 +316,10 @@ def merge_snp_genes(snp_dict, gene_data):
             if snp.get("gene_id") is None or gene_id != snp.get("gene_id"):
                 continue
             if gene_dict.get(snp["gene_id"]) is None:
-                gene_dict[snp["gene_id"]] = {"gene_id":gene_id, "gene_locus":gene_locus, "gene_desc":gene_desc, "mutated": False}
+                if gene_desc is None:
+                    gene_desc = snp["gene_desc"]
+                gene_dict[snp["gene_id"]] = {"gene_id":gene_id, "gene_locus":gene_locus, "gene_desc":gene_desc,
+                "summary": summary, "mutated": False}
 
             snp_mutated = snp["indel"]
             genotype = snp["genotype"]
@@ -271,19 +329,19 @@ def merge_snp_genes(snp_dict, gene_data):
                 snp_mutated = snp_mutated or char != reference_genotype
             
             clinical_signifiance = snp.get("clinical_signifiance")
-            if clinical_signifiance is None:
-                clinical_signifiance = "NONE"
-            if snp_mutated:
-                gene_dict[snp["gene_id"]]["mutated"] = True
-                snp_clinical_signifiance_mutated[clinical_signifiance]\
-                    .append(f"{rsid} {genotype}")
-            snp_clinical_signifiance[clinical_signifiance]\
-                .append(f"{rsid} {genotype}:{"Mutated" if snp_mutated else "Reference"}")
+            if clinical_signifiance is not None:
+                if snp_mutated:
+                    gene_dict[snp["gene_id"]]["mutated"] = True
+                    snp_clinical_signifiance_mutated[clinical_signifiance]\
+                        .append(f"{rsid} {genotype}")
+                snp_clinical_signifiance[clinical_signifiance]\
+                    .append(f"{rsid} {genotype}:{'Mutated' if snp_mutated else 'Reference'}")
 
         # Create the entry if it's not in any snp
         gene_elem = gene_dict.get(gene_id)
         if gene_elem is None:
-            gene_dict[gene_id] = {"gene_id":gene_id, "gene_locus":gene_locus, "gene_desc":gene_desc, "mutated": False}
+            gene_dict[gene_id] = {"gene_id":gene_id, "gene_locus":gene_locus, "gene_desc":gene_desc,
+            "summary": summary, "mutated": False}
         
         # Add clinical signifiance columns
         for col in cs_list: #Convert list into string and add to gene_elem
@@ -296,6 +354,7 @@ def merge_snp_genes(snp_dict, gene_data):
             for col in cs_list:
                 gene_elem_mutated[col] = ','.join(snp_clinical_signifiance_mutated[col])
             gene_dict_mutated[gene_id] = gene_elem_mutated
+        i = i+1
     return [gene_dict, gene_dict_mutated]
 
 
@@ -360,17 +419,15 @@ def merge_snp_genes(snp_dict, gene_data):
 # Find the most relevant clinical signifiance and returns a category for it
 def get_clinical_signifiance_category(cs_string):
     cs_string = cs_string or "None"
-    cs_list = cs_string.split(",")
+    current_cs_list = cs_string.split(",")
     best = "NONE"
     best_pos = 999
-    for cs in cs_list:
-        pos = 0
+    for cs in current_cs_list:
         for key in clinical_signifiance_dict.keys():
-            pos = pos + 1
+            pos = clinical_signifiance_dict[key]
             if key == cs and pos < best_pos:
-                best = clinical_signifiance_dict[key]
                 best_pos = pos
-                break
+                best = cs_list[pos]
     return best
 
 def export_csv(data, filename = "output.csv"):
@@ -381,7 +438,8 @@ def export_csv(data, filename = "output.csv"):
     csv_str = ",".join(f"\"{x}\"" for x in data[0].keys()) + "\n"
     # Content
     for element in data:
-        csv_str = f"{csv_str}{",".join(f"\"{str(x).replace('"','""')}\"" for x in element.values())}\n"
+        csv_str = csv_str + ','.join('"' + str(x).replace('"','""') + '"' for x in element.values()) + "\n"
+
     f = open(filename, "a")
     f.write(csv_str)
     f.close()
@@ -390,14 +448,16 @@ start = time.time()
 snp_elements = read_input("input.txt")#TODO: remove
 chromosome_dict = get_chromosomes(assembly_grch37_chromosomes_dict)
 shallow_snp = get_shallow_snp(snp_elements, chromosome_dict)
+del chromosome_dict
 snp_data = fetch_snp(shallow_snp)
 export_csv(snp_skipped, "skipped.csv")
-
-final_data = merge_snp_genes(snp_data,fetch_genes(set(gene_list)))
+gene_set = set(gene_list)
+fetch_genes(snp_data, gene_set)
+#final_data = merge_snp_genes(snp_data, gene_set, fetch_genes(gene_set))
 
 print("Exporting output.csv")
-export_csv(final_data[0])
-export_csv(final_data[1], "output_mutated.csv")
+#export_csv(snp_data[0])
+#export_csv(snp_data[1], "output_mutated.csv")
 
 end = time.time()
 print(f"Done in {end - start} seconds")
