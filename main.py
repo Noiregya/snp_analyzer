@@ -147,30 +147,6 @@ def get_shallow_snp(snp_elements, chromosome_dict):
         last_chromosome = chromosome
     return shallow_snps
 
-# with open("input.txt", "r", encoding="utf-8") as file:
-#     lines = file.read().splitlines()
-#     for line in lines:
-#         splitline = line.split()
-#         rsid = splitline[0]
-#         match rsid[0]:
-#             case "#":
-#                 continue
-#             case "i":
-#                 chromosome = splitline[1]
-#                 position = splitline[2]
-#                 genotype = splitline[3]
-#                 snp_skipped.append({"rsid":rsid, "chromosome":chromosome,
-#                     "position": position, "genotype":genotype})
-#                 continue
-#             case _:
-#                 chromosome = splitline[1]
-#                 position = splitline[2]
-#                 genotype = splitline[3]
-#                 if genotype == "--":
-#                     snp_skipped.append({"rsid":rsid, "chromosome":chromosome,
-#                         "position": position, "genotype":genotype})
-#                 else:
-#                     snp_dict[rsid[2:]] = genotype
 
 def fetch_snp(snp_dict):
     snp_ids = []
@@ -208,9 +184,9 @@ def fetch_snp(snp_dict):
     with open("snps.xml", "r", encoding="utf-8") as file:
         print("Loading snps...")
         data = file.read()
-        #snp_dict = json.loads(data)
 
     return assemble_snp(data, snp_dict) #TODO: Parse using Entrez
+
 
 def assemble_snp(data, snp_dict):
     top = xmltodict.parse(data)['top']
@@ -245,20 +221,11 @@ def fetch_genes(snp_dict, gene_set):
     search_results = Entrez.read(Entrez.epost("gene", id=",".join(gene_set)))
     query_key = search_results["QueryKey"]
     webenv = search_results["WebEnv"]
-    
-    # handle = Entrez.efetch(
-    #         db="gene",
-    #         id=gene_set,
-    #         retmode="xml",
-    #         complexity="4",
-    #     )
 
     batch_size = 500
     count = len(gene_set)
-    #data = b""
     for gene_start in range(0, count, batch_size):
         gene_end = min(count, gene_start + batch_size)
-        #data = data + stream.read()
         attempts = 5
         i = 0
         while i < attempts:
@@ -289,7 +256,6 @@ def fetch_genes(snp_dict, gene_set):
         export_csv(data)
         export_csv(mutated_data, "output_mutated.csv")
         print("Processing genes")
-    #res = Entrez.parse(data)
     return
 
 
@@ -301,9 +267,6 @@ def merge_snp_genes(snp_dict, gene_data):
     i = 0
     length = len(gene_data)
     for gene in gene_data:
-        #if i % steps == 0:
-        #    percentage = "{:.2f}".format(i / length * 100)
-        #    print(f"Fusion progress {percentage} %")
         gene_desc = gene["Entrezgene_gene"]["Gene-ref"].get("Gene-ref_desc")
         gene_locus = gene["Entrezgene_gene"]["Gene-ref"]["Gene-ref_locus"]
         gene_id = gene["Entrezgene_track-info"]["Gene-track"]["Gene-track_geneid"]
@@ -357,65 +320,6 @@ def merge_snp_genes(snp_dict, gene_data):
         i = i+1
     return [gene_dict, gene_dict_mutated]
 
-
-# Creates an array of all the genes with snp info
-# def add_genes(snp_data, gene_data):
-#     print(f"Fusing {len(gene_data)} genes with SNPs")
-#     gene_array = []
-#     gene_array_mutated = []
-#     steps = 100
-#     for i in range(len(gene_data)):
-#         gene = gene_data[i]
-#         if i % steps == 0:
-#             percentage = "{:.2f}".format(i / len(gene_data) * 100)
-#             print(f"Fusion progress {percentage} %")
-#         if "Entrezgene_prot" in gene:
-#             protein_desc = gene["Entrezgene_prot"]["Prot-ref"].get("Prot-ref_desc") or\
-#                 ",".join(gene["Entrezgene_prot"]["Prot-ref"].get("Prot-ref_name"))
-#         summary = gene.get("Entrezgene_summary") or ""
-#         gene_desc = gene["Entrezgene_gene"]["Gene-ref"]["Gene-ref_desc"]
-#         gene_locus = gene["Entrezgene_gene"]["Gene-ref"]["Gene-ref_locus"]
-#         gene_id = gene["Entrezgene_track-info"]["Gene-track"]["Gene-track_geneid"]
-
-#         snp_clinical_signifiance = {k: [] for k in cs_list}
-#         snp_clinical_signifiance_mutated = {k: [] for k in cs_list}
-#         mutated = False
-#         for snp in snp_data:
-#             genes_in_snp = snp["GENES"]
-#             if genes_in_snp is None:
-#                 continue
-#             genes_content = genes_in_snp["GENE_E"]
-#             if not isinstance(genes_content, list):
-#                 genes_content = [genes_content]
-#             for gene_content in genes_content:
-#                 snp_gene_id = gene_content["GENE_ID"]
-#                 genotype = snp_dict.get(snp["SNP_ID"])
-#                 if gene_id == snp_gene_id and genotype is not None:
-#                     reference_genotype = snp["SPDI"].split(":")[2]
-#                     snp_mutated = False
-#                     # Check genotype against reference 
-#                     for char in genotype:
-#                         snp_mutated = snp_mutated or char != reference_genotype
-#                     if snp_mutated:
-#                         mutated = True
-#                         snp_clinical_signifiance_mutated[snp["CLINICAL_SIGNIFICANCE"]]\
-#                         .append(f"{snp["SNP_ID"]} {genotype}")
-#                     snp_clinical_signifiance[snp["CLINICAL_SIGNIFICANCE"]]\
-#                     .append(f"{snp["SNP_ID"]} {genotype}:{"Mutated" if mutated else "Reference"}")
-#                     break
-
-#         gene_base = {"gene_id":gene_id, "gene_locus":gene_locus, "gene_desc":gene_desc, "summary":summary}
-#         gene_info = gene_base.copy()
-#         for col in cs_list: #Convert list into string and add to gene_info
-#             gene_info[col] = ','.join(snp_clinical_signifiance[col])
-#         gene_array.append(gene_info)
-#         if(mutated):
-#             gene_info_mutated = gene_base.copy()
-#             for col in cs_list:
-#                 gene_info_mutated[col] = ','.join(snp_clinical_signifiance_mutated[col])
-#             gene_array_mutated.append(gene_info_mutated)
-#     return [gene_array, gene_array_mutated]
-
 # Find the most relevant clinical signifiance and returns a category for it
 def get_clinical_signifiance_category(cs_string):
     cs_string = cs_string or "None"
@@ -430,12 +334,15 @@ def get_clinical_signifiance_category(cs_string):
                 best = cs_list[pos]
     return best
 
+
 def export_csv(data, filename = "output.csv"):
     array = []
     if type(data) == dict:
         data = list(data.values())
+    csv_str = ""
     # Header
-    csv_str = ",".join(f"\"{x}\"" for x in data[0].keys()) + "\n"
+    if not os.path.isfile(filename):
+        csv_str = ",".join(f"\"{x}\"" for x in data[0].keys()) + "\n"
     # Content
     for element in data:
         csv_str = csv_str + ','.join('"' + str(x).replace('"','""') + '"' for x in element.values()) + "\n"
@@ -443,6 +350,7 @@ def export_csv(data, filename = "output.csv"):
     f = open(filename, "a")
     f.write(csv_str)
     f.close()
+
 
 start = time.time()
 snp_elements = read_input("input.txt")#TODO: remove
@@ -453,11 +361,8 @@ snp_data = fetch_snp(shallow_snp)
 export_csv(snp_skipped, "skipped.csv")
 gene_set = set(gene_list)
 fetch_genes(snp_data, gene_set)
-#final_data = merge_snp_genes(snp_data, gene_set, fetch_genes(gene_set))
 
 print("Exporting output.csv")
-#export_csv(snp_data[0])
-#export_csv(snp_data[1], "output_mutated.csv")
 
 end = time.time()
 print(f"Done in {end - start} seconds")
